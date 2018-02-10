@@ -1,5 +1,3 @@
-3
-3
 function! s:new(str)
 	let inst = deepcopy(s:TNT)
 	let inst.str = a:str
@@ -26,26 +24,42 @@ function! s:rewriteList(delim, quote, bracket) dict
 
 
 	if self.nextToken() != 'OPENING_BRACKET'
-		throw "Unexpected token " . self.str[self.idx] . ", expecting an open bracket (or similar)."
+		throw "Unexpected token " . self.str[self.idx] . ", expecting an OPENING_BRACKETS."
 	end
 
-	let item = self.consumeItem()
 	let items = []
 
-	while !item.eof
+	while !exists('item') || !item.eof
 		let item = self.consumeItem()
-		call add(items, a:quote . item . a:quote)
+
+		let item.str = s:tern(item.quoted, a:quote . item.str . a:quote, item.str)
+		call add(items, item.str)
+
 		" TODO: Sub out the previous escaped quote characters inside of the
 		" item with the new quote character.
 
+		let tok = self.nextToken()
 		" Consume the following delimeter
-		if self.nextToken() != 'DELIM'
-			throw "Unexpected token '" . self.str[self.idx] . "', expecting a delimeter."
+		if tok != 'DELIM' && tok != 'CLOSING_BRACKET'
+			throw "Unexpected token '" . self.tok . "', expecting a DELIM or a CLOSING_BRACKET."
+		elseif tok == 'CLOSING_BRACKET'
+			let delim = s:tern(a:delim != ' ', ' ' . a:delim . ' ', ' ')
+			return open_bracket . join(items, delim) . close_bracket
 		endif
 	endwhile
 
-	echo "ITEMS: " . join(items, " " . a:delim . " ")
+endfunction
 
+function! s:tern(condition, a, b)
+	if a:condition
+		return a:a
+	else
+		return a:b
+	endif
+endfunction
+
+function! s:badTok(expect)
+	return "Unexpected token '" . self.tok . "', expecting a ".a:expect
 endfunction
 
 function! s:consumeItem() dict
@@ -54,13 +68,15 @@ function! s:consumeItem() dict
 	if peek == 'WORD'
 		call self.nextToken()
 		let item = self.tok
+		let quoted = 0
 	elseif peek == 'QUOTE'
 		let item = self.consumeQuote()
+		let quoted = 1
 	else
-		return {'str': '', 'eof': 1}
+		return {'str': '', 'eof': 1, 'quoted': 0}
 	end
 
-	return {'str': item, 'eof': 0}
+	return {'str': item, 'eof': 0, 'quoted': quoted}
 endfunction
 
 function! s:peek() dict
@@ -75,7 +91,29 @@ function! s:peek() dict
 endfunction
 
 function! s:consumeQuote() dict
-	return 'flabber'
+	let escaping = 0
+
+	if self.nextToken() != 'QUOTE'
+		throw self.badTok("QUOTE")
+	end
+
+	let quot = self.tok
+	let str = ""
+
+	" Look for the matching closing quote
+	while escaping || self.str[self.idx] != quot
+		" Finished the escape sequence (probably)
+		let str .= self.str[self.idx]
+		let self.idx += 1
+		if escaping
+			escaping = 0
+		endif
+	endwhile
+
+	" Move past the closing quote
+	let self.idx += 1
+
+	return str
 endfunction
 
 function! s:indent()
@@ -140,4 +178,4 @@ let s:TNT = {
 	\ 'CLOSING_BRACKETS': [')', ']', '>'],
 \ }
 
-echo s:TNT.new("abc(foo, bar)").rewriteList(",", "'", "[")
+echo "NEW LIST: " . s:TNT.new("abc(foo, 'bar', baz)").rewriteList(" ", ";", "(")
