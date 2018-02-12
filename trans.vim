@@ -1,10 +1,40 @@
-function! s:new(str)
+function! s:new(start, end) dict
 	let inst = deepcopy(s:TNT)
-	let inst.str = a:str
+	let inst.start = a:start
+	let inst.end = a:end
+	let inst.str = join(getline(a:start, a:end), "")
+
+	if !&expandtab
+		let [str, start, end] = matchstrpos(inst.str, "\v^\t+")
+	else
+		let [str, start, end] = matchstrpos(inst.str, "\v^[ ]+")
+	endif
+
+	if start == -1
+		let inst.indent = 0
+	else
+		let inst.indent = end/&ts
+	endif
+
 	return inst
 endfunction
 
-function! s:rewriteList(delim, quote, bracket) dict
+function! s:rewriteList(bracket, quote, delim, multiline) dict
+	let res = self.fmtList(a:bracket, a:quote, a:delim, a:multiline)
+
+	if !a:multiline
+		call setline(self.start, res)
+	elseif a:multiline
+		if self.start > self.end
+			execute self.start . "," . (self.end - 1)."d"
+		endif
+		call setline(self.start, res[0])
+		call append(self.start, res[1:])
+	endif
+
+endfunction
+
+function! s:fmtList(bracket, quote, delim, multiline) dict
 	let open_bracket = a:bracket
 	let close_idx = match(self.OPENING_BRACKETS, a:bracket)
 
@@ -15,10 +45,12 @@ function! s:rewriteList(delim, quote, bracket) dict
 	endif
 
 	let res = ""
+	let prefix = ""
 
 	" Advance past anything before the opening bracket. We specifically don't
 	" tokenize this because it could be any garbage and we don't care.
 	while match(self.OPENING_BRACKETS, self.str[self.idx]) == -1
+		let prefix .= self.str[self.idx]
 		let self.idx += 1
 	endwhile
 
@@ -43,11 +75,35 @@ function! s:rewriteList(delim, quote, bracket) dict
 		if tok != 'DELIM' && tok != 'CLOSING_BRACKET'
 			throw "Unexpected token '" . self.tok . "', expecting a DELIM or a CLOSING_BRACKET."
 		elseif tok == 'CLOSING_BRACKET'
-			let delim = s:tern(a:delim != ' ', ' ' . a:delim . ' ', ' ')
-			return open_bracket . join(items, delim) . close_bracket
+			if !a:multiline
+				let delim = s:tern(a:delim != ' ', ' ' . a:delim . ' ', ' ')
+				return prefix . open_bracket . join(items, delim) . close_bracket
+			else
+				let results = [self.genIndent(self.indent) . prefix . open_bracket]
+
+				for i in range(len(items))
+					let item = items[i]
+					if i != len(items) - 1
+						call add(results, self.genIndent(self.indent + 1) . item . a:delim)
+					else
+						call add(results, self.genIndent(self.indent + 1) . item)
+					endif
+				endfor
+				call add(results, self.genIndent(self.indent) . close_bracket)
+
+				return results
+			endif
 		endif
 	endwhile
 
+endfunction
+
+function! s:genIndent(num) dict
+	let res = ""
+	for i in range(a:num)
+		let res .= "\t"
+	endfor
+	return res
 endfunction
 
 function! s:tern(condition, a, b)
@@ -58,7 +114,7 @@ function! s:tern(condition, a, b)
 	endif
 endfunction
 
-function! s:badTok(expect)
+function! s:badTok(expect) dict
 	return "Unexpected token '" . self.tok . "', expecting a ".a:expect
 endfunction
 
@@ -116,9 +172,6 @@ function! s:consumeQuote() dict
 	return str
 endfunction
 
-function! s:indent()
-endfunction
-
 function! s:advancePast(pats) dict
 	return self.advanceTo(a:pats, 1)
 endfunction
@@ -128,7 +181,7 @@ function! s:nextToken() dict
 	let self.tok = ''
 
 	" Consume any leading whitespace
-	while self.str[self.idx] == ' '
+	while match(self.str[self.idx], '\v\s+') != -1
 		let self.idx += 1
 	endwhile
 
@@ -163,19 +216,24 @@ endfunction
 
 let s:TNT = {
 	\ 'idx': 0,
+	\ 'indent': -1,
+	\ 'start': -1,
+	\ 'end': -1,
 	\ 'str': '',
 	\ 'tok': '',
 	\ 'eof': 0,
+	\ 'genIndent': function('s:genIndent'),
 	\ 'new': function('s:new'),
 	\ 'rewriteList': function('s:rewriteList'),
 	\ 'nextToken': function('s:nextToken'),
 	\ 'consumeItem': function('s:consumeItem'),
 	\ 'consumeQuote': function('s:consumeQuote'),
+	\ 'fmtList': function('s:fmtList'),
 	\ 'peek': function('s:peek'),
-	\ 'DELIMS': [",", ":", "=>"],
+	\ 'DELIMS': [",", ":", "=>", " "],
 	\ 'QUOTES': ["'", '"'],
 	\ 'OPENING_BRACKETS': ['(', '[', '<'],
 	\ 'CLOSING_BRACKETS': [')', ']', '>'],
 \ }
 
-echo "NEW LIST: " . s:TNT.new("abc(foo, 'bar', baz)").rewriteList(" ", ";", "(")
+command! -nargs=* -range -bang TNT call s:TNT.new(<line1>, <line2>).rewriteList(<f-args>, <bang>0)
