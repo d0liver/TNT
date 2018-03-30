@@ -2,7 +2,8 @@ function! s:new(start, end) dict
 	let inst = deepcopy(s:TNT)
 	let inst.start = a:start
 	let inst.end = a:end
-	let inst.str = join(getline(a:start, a:end), "")
+
+	let inst.str = join(getline(a:start, a:end), "\n")
 
 	if !&expandtab
 		let [str, start, end] = matchstrpos(inst.str, "\v^\t+")
@@ -22,12 +23,13 @@ endfunction
 function! s:rewriteList(bracket, quote, delim, multiline) dict
 	let res = self.fmtList(a:bracket, a:quote, a:delim, a:multiline)
 
+	if self.end > self.start
+		execute self.start . "," . (self.end - 1)."d"
+	endif
+
 	if !a:multiline
 		call setline(self.start, res)
 	elseif a:multiline
-		if self.start > self.end
-			execute self.start . "," . (self.end - 1)."d"
-		endif
 		call setline(self.start, res[0])
 		call append(self.start, res[1:])
 	endif
@@ -54,9 +56,8 @@ function! s:fmtList(bracket, quote, delim, multiline) dict
 		let self.idx += 1
 	endwhile
 
-
 	if self.nextToken() != 'OPENING_BRACKET'
-		throw "Unexpected token " . self.str[self.idx] . ", expecting an OPENING_BRACKETS."
+		throw "Unexpected token " . self.str[self.idx] . ", expecting an OPENING_BRACKET."
 	end
 
 	let items = []
@@ -73,6 +74,8 @@ function! s:fmtList(bracket, quote, delim, multiline) dict
 		let tok = self.nextToken()
 		" Consume the following delimeter
 		if tok != 'DELIM' && tok != 'CLOSING_BRACKET'
+			echo "TOK: " . tok
+			echo "REMAINING: " . self.str[self.idx:-1]
 			throw "Unexpected token '" . self.tok . "', expecting a DELIM or a CLOSING_BRACKET."
 		elseif tok == 'CLOSING_BRACKET'
 			if !a:multiline
@@ -172,10 +175,6 @@ function! s:consumeQuote() dict
 	return str
 endfunction
 
-function! s:advancePast(pats) dict
-	return self.advanceTo(a:pats, 1)
-endfunction
-
 function! s:nextToken() dict
 	let start_idx = self.idx
 	let self.tok = ''
@@ -188,10 +187,15 @@ function! s:nextToken() dict
 	let types = ['DELIMS', 'QUOTES', 'OPENING_BRACKETS', 'CLOSING_BRACKETS']
 
 	for type in types
+		echo "TYPE: " . type
 		for tok in self[type]
-			if self.str[self.idx:self.idx + len(tok) - 1] == tok
-				let self.tok = self.str[self.idx:self.idx + len(tok) - 1]
-				let self.idx += 1
+			let [str, start, end] = matchstrpos(self.str[self.idx:-1], '\v^' . tok)
+			if start != -1
+				let self.tok = self.str[start:end - 1]
+				let self.idx += len(str) + 1
+				echo "STR: " . str
+				echo "TOK: " . self.tok
+				echo "IDX: " . self.idx
 				return type[0:-2]
 			end
 		endfor
@@ -230,10 +234,10 @@ let s:TNT = {
 	\ 'consumeQuote': function('s:consumeQuote'),
 	\ 'fmtList': function('s:fmtList'),
 	\ 'peek': function('s:peek'),
-	\ 'DELIMS': [",", ":", "=>", " "],
-	\ 'QUOTES': ["'", '"'],
-	\ 'OPENING_BRACKETS': ['(', '[', '<'],
-	\ 'CLOSING_BRACKETS': [')', ']', '>'],
+	\ 'DELIMS': ['\,\n', '[a-zA-Z"0-9]{1}\zs\n\ze', '\,', '\:', '\=\>'],
+	\ 'QUOTES': ["\'", '\"'],
+	\ 'OPENING_BRACKETS': ['\[\n', '\(', '\[', '\<'],
+	\ 'CLOSING_BRACKETS': ['\]', '\)', '\]', '\>'],
 \ }
 
 command! -nargs=* -range -bang TNT call s:TNT.new(<line1>, <line2>).rewriteList(<f-args>, <bang>0)
